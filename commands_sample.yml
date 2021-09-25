@@ -1,0 +1,14 @@
+# Usage example, rename the file to commands.yml
+
+command_name: # name used to identify this command, will be matched by the topic parameter
+  topic: example/topic # topic that will replace the topic passed as parameter
+  options:
+    'on': '1' # when message parameter is 'on', it will translate it to '1'
+    'off': '0' # when message parameter is 'off', it will translate it to '0'
+    # if the message parameter is not in the options list, it will be sent as is
+
+another_command:
+  topic: example/topic2
+  options:
+    '1': 'on' # when message parameter is '1', it will translate it to 'on'
+    '0': 'off' # when message parameter is '0', it will translate it to 'off'

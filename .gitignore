@@ -36,9 +36,12 @@ jspm_packages
 # Optional REPL history
 .node_repl_history
 
-# Heroku environment
+# dotenv
 .env
 
 # Mac files
 .DS_Store
 /.vs
+
+# Project files
+commands.yml

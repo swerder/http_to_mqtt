@@ -1,118 +1,130 @@
 # HTTP to MQTT bridge
+Receive requests using HTTP and transfer them to your MQTT broker. The HTTP to MQTT bridge is written using Node JS with [Express](https://expressjs.com/) for HTTP server and [MQTT.js](https://www.npmjs.com/package/mqtt) client.
 
-The idea of creating HTTP to MQTT bridge appeared when I was trying to integrate Google Assistant with my Home Assistant after watching [BRUH Automation](https://youtu.be/087tQ7Ly7f4?t=265) video. Right now there is no MQTT service available in [IFTTT](https://ifttt.com/about). Existing integration solution uses [Maker Webhooks](https://ifttt.com/maker_webhooks) which requires that your HA is publically accessible, which I think brings some security concerns or simply not always possible to set up.
+By default, the `http_to_mqtt` will listen on port 5000 and connect to a test mqtt server.  
+The MQTT Broker (and other settings) can be specified by environment variables or .env file.
 
-The HTTP to MQTT bridge should feel that gap. The idea is to receive signals using HTTP requests and transfer them to your MQTT broker, which is connected to HA. The HTTP to MQTT bridge is written using Node JS with [Express](https://expressjs.com/) for HTTP server and [MQTT.js](https://www.npmjs.com/package/mqtt) client.
+## Settings (Environment Variables)
+```dotenv
+MQTT_HOST=mqtt://test.mosquitto.org
+MQTT_USER=
+MQTT_PASS=
+MQTT_CLIENT_ID=
+API_KEY=MY_SECRET_KEY
+DEBUG_MODE=false
+PORT=5000
+```
+PS: Leave API_KEY empty for disabling it
 
-## Usage
-
-The app could be hosted on any Node JS hosting. 
-
-### Heroku
-
-I prefer [Heroku: Cloud Application Platform](https://www.heroku.com/home) for its simplicity.  
-
-1. Configure Home Assistant [MQTT trigger](https://home-assistant.io/docs/automation/trigger/#mqtt-trigger).
-1. Configure [CloudMQTT](https://www.cloudmqtt.com/). Here is a great video tutorial on how to do that: https://www.youtube.com/watch?v=VaWdvVVYU3A
-1. [![Deploy](https://www.herokucdn.com/deploy/button.svg)](https://heroku.com/deploy?template=https://github.com/petkov/http_to_mqtt) HTTP to MQTT bridge app.
-1. Add below (Config Variables)(https://devcenter.heroku.com/articles/config-vars#setting-up-config-vars-for-a-deployed-application) to your Heroku app.
-   * AUTH_KEY - can be any string eg.: 912ec803b2ce49e4a541068d495ab570.
-   * MQTT_HOST - the host of your MQTT broker (eg.: mqtts://k99.cloudmqtt.com:21234).
-   * MQTT_USER
-   * MQTT_PASS
-1. Create IFTTT applet the same way as described in [BRUH Automation](https://youtu.be/087tQ7Ly7f4?t=265) video.
-1. Configure [Maker Webhooks](https://ifttt.com/maker_webhooks) service with below parameters.
-   * URL: https://<app_name>.herokuapp.com/post/
-   * Method: POST
-   * Content Type: application/json
-   * Body: {"topic":"<mqtt_topic>","message":"<mqtt_message>","key":"<AUTH_KEY>"}
-   
-#### Subscribe to latest version
-
-Additionally you can make Heroku to update HTTP to MQTT bridge app to the latest available version from GitHub repository automatically. To do this follow the instruction on [Heroku help page](https://devcenter.heroku.com/articles/github-integration#automatic-deploys).
-
-#### Improve response time
-
-After 30 minutes of inactivity Heroku will put your app into sleep mode. This will result in ~10 seconds response time. To prevent Heroku from putting your app into sleep mode ping it every 10 minutes or so. You can do that by sending regular HTTP GET request to http://your_app/keep_alive/. But be carefull. Heroku free quota is 550 hours per month. Without sleeping your app will be allowed to run only 22 days a month. Additionally keep_alive method will send a simple MQTT message to prevent the broker from sleeping as well. The topic and message can be configured using Heroku environment variables KEEP_ALIVE_TOPIC and KEEP_ALIVE_MESSAGE and both are set to “keep_alive” by default.
-
-
-##### Home Assistant Setup
-You can even configure HA to ping HTTP to MQTT bridge every 10 minutes during daytime. Below is an example of how to do that:
-
-```yaml
-rest_command:
-  http_to_mqtt_keep_alive:
-    url: https://<your_app_address>/keep_alive/
-    method: get
-
-automation:
-  alias: HTTP to MQTT keep alive
-  trigger:
-    platform: time
-    minutes: '/10'
-    seconds: 00
-  condition:
-    condition: time
-    after: '7:30:00'
-    before: '23:59:59'
-  action:
-    service: rest_command.http_to_mqtt_keep_alive
+## Docker Run
+```sh
+docker run -p 5000:5000 \
+-e MQTT_HOST=mqtt://test.mosquitto.org \
+-e API_KEY=MY_SECRET_KEY \
+uilton/http_to_mqtt:latest
 ```
 
-### Use Your Own Server
-You can run this on basically anything that runs NodeJS.
+Optionally, if you plan to use the cmd endpoint, you must create a volume to `/usr/src/app/commands.yml` file
 
-1.  Clone the repository
-2.  Run index.js
+Eg:
+```sh
+docker run -p 5000:5000 \
+-e MQTT_HOST=mqtt://test.mosquitto.org \
+-e API_KEY=MY_SECRET_KEY \
+-v path/to/commands.yml:/usr/src/app/commands.yml:ro \
+uilton/http_to_mqtt:latest
+```
 
-#### Examples
+## Publish to a topic
+Publish a message to the topic 'MyTopic' (api-key is not necessary if it's not defined as environment variable)
 
-
-##### Publish to a topic
-Clone the repository and run `http_to_mqtt`.
-
-By default the `http_to_mqtt` will listen on port 5000 and connect to the localhost MQTT Broker.  
-The MQTT Broker (and other settings) can be specified by environment variables.
-
+Sending as POST with topic, message and api-key as body
 ```bash
-git clone https://github.com/petkov/http_to_mqtt.git
-cd http_to_mqtt
-node index.js
+curl -H "Content-Type: application/json" "http://localhost:5000/publish"  -d '{"topic" : "MyTopic", "message" : "hi", "api-key": "MY_SECRET_KEY" }'
 ```
 
-output:
-```
-Node app is running on port 5000
-```
+OR
 
-Publish a message to the topic 'MyTopic'
+Sending as POST with 'topic' and 'message' as body and 'API-KEY' as Header
 ```bash
-curl -H "Content-Type: application/json" "http://localhost:5000/post"  -d '{"topic" : "MyTopic", "message" : "Hello World" }'
+curl -H "Content-Type: application/json" -H "API-KEY: MY_SECRET_KEY" "http://localhost:5000/publish"  -d '{"topic" : "MyTopic", "message" : "hi" }'
 ```
 
-output:
+OR
+
+Sending as GET (/publish/:topic/:message) and with 'api-key' as Query Parameter
+```bash
+curl "http://localhost:5000/publish/MyTopic/hi?api-key=MY_SECRET_KEY"
+```
+
+OR
+
+Sending as GET (/publish/:topic/:message) and with 'API-KEY' as HEADER
+```bash
+curl -H "API-KEY: MY_SECRET_KEY" "http://localhost:5000/publish/MyTopic/hi"
+```
+
+OR
+
+Sending as GET (/publish) with topic and message as Query Parameter and 'API-KEY' as HEADER
+```bash
+curl -H "API-KEY: MY_SECRET_KEY" "http://localhost:5000/publish?topic=MyTopic&message=hi"
+```
+
+Response:
 ```
 OK
 ```
 
-#### Subscribe to a topic
+## Publish to a topic, but replacing the received topic / message to something else
 
-You can subscribe to a topic.  `http_to_mqtt` will keep the connection open and wait for a messages from the MQTT Broker and will send them to the response each time a message is handled.
+My goal with this endpoint is to create a generic applet on ifttt that can be configured to do different things, but can be used just to remap a topic or a key to something else, same for message, like remap 'on' to '1', for example.
 
 ```bash
-git clone https://github.com/petkov/http_to_mqtt.git
-cd http_to_mqtt
-node index.js
+curl "http://localhost:5000/cmd/command_name/on?api-key=MY_SECRET_KEY"
 ```
 
-output:
+Based on `commands_sample.yml` it will be translated to topic `example/topic` with a message `1`
+
+Response:
 ```
-Node app is running on port 5000
+OK
 ```
 
-Publish a message to the topic 'MyTopic'.  Use `-ivs --raw` to see messages come in as they are received.
+All the request variations from the `publish` API, as above, also apply here.
+
+`commands.yml`
+```yaml
+command_name: # name used to identify this command, will be matched by the topic parameter
+  topic: example/topic # topic that will replace the topic passed as parameter
+  options:
+    'on': '1' # when message parameter is 'on', it will translate it to '1'
+    'off': '0' # when message parameter is 'off', it will translate it to '0'
+    # if the message parameter is not in the options list, it will be sent as is
+
+another_command:
+  topic: example/topic2
+  options:
+    '1': 'on' # when message parameter is '1', it will translate it to 'on'
+    '0': 'off' # when message parameter is '0', it will translate it to 'off'
+```
+
+## Subscribe to a topic
+
+You can subscribe to a topic.  `http_to_mqtt` will keep the connection open and wait for messages from the MQTT Broker and will send them as response when received.
+
+Listen for messages in the topic 'MyTopic'.  Use `-ivs --raw` to see messages come in as they are received.
+
+Sending as GET with 'topic' and 'api-key' as Query Parameter
 ```bash
-curl -ivs --raw localhost:5000/subscribe?topic=MyTopic
+curl -ivs --raw "http://localhost:5000/subscribe?topic=MyTopic&api-key=MY_SECRET_KEY"
+```
+
+OR
+
+Sending as GET (/subscribe/:topic) with 'topic' as Path Parameter and 'API-KEY' as HEADER
+```bash
+curl -H "API-KEY: MY_SECRET_KEY" -ivs --raw "http://localhost:5000/subscribe/MyTopic"
 ```
 
 output:
@@ -129,7 +141,7 @@ output:
 
 Whenever a message is published to the topic MyTopic curl will output the message.
 
-Use mosquitto_pub to publish a message:
+Use mosquitto_pub to publish a message (or send as http request, as above):
 ```bash
 mosquitto_pub -t 'MyTopic' -m 'I sent this message using Mosquitto'
 ```
@@ -140,20 +152,3 @@ curl output:
 23
 I sent this message using Mosquitto
 ```
-
-## Specific Use Cases
-### Plex
-Plex has the ability to specify web hooks.
-
-We must use some query parameters to tell http_to_mqtt to handle certain things specific to our use case.
- - topic=/plex/playback : Since Plex does not know which MQTT topic to post to, we must specify that via the topic query parameter.  This can be anything.
- - single=thumb : Plex send the user's thumbnail as the 'thumb' file.  Setting the single query parameter tells http_to_mqtt to handle single file uploads.
- - path=payload : The information we care about is specified by the payload property of the JSON uploaded.  Tell http_to_mqtt that that is the message that should be published.
- 
-```
-http://localhost:5000/post?topic=/plex/playback&single=thumb&path=payload
-```
-
-## Thanks
-
-Special thanks to Ben from [BRUH Automation](https://www.youtube.com/channel/UCLecVrux63S6aYiErxdiy4w/featured) for awesome tutorials which inspired me to do this project.
