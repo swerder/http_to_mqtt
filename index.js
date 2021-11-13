@@ -1,3 +1,4 @@
+(async () => {
 require('dotenv').config()
 const mqtt = require('mqtt');
 const app = require('express')();
@@ -16,35 +17,58 @@ const settings = {
     apiKey: process.env.API_KEY || '',
     httpPort: process.env.PORT || 5000
 }
+console.log("settings", settings);
 
-function getMqttClient() {
+
+function getMqttClient(clientId = undefined) {
     const options = {
         username: settings.mqtt.user,
-        password: settings.mqtt.password
+        password: settings.mqtt.password,
+        clean: true
     };
 
-    if (settings.mqtt.clientId) {
+    if (typeof clientId !== 'undefined'){
+        options.clientId = clientId
+    }
+    else if (settings.mqtt.clientId) {
         options.clientId = settings.mqtt.clientId
     }
 
-    return mqtt.connect(settings.mqtt.host, options);
+    let client = mqtt.connect(settings.mqtt.host, options);
+
+    client.on("connect", function(){
+		if (options.clientId) {
+			console.log("connected", options.clientId || "");
+		}
+    });
+    client.on("error", function(error){
+        console.error("Can't connect", options.clientId || "", "error:", error);
+        process.exit(128 + 1);
+    });
+    return client;
 }
 
 const mqttClient = getMqttClient();
 
-app.set('port', settings.httpPort);
-app.use(logRequest);
-app.use(authorizeUser);
-app.use('/publish/:topic?/:message?/:qos?/:retain?', bodyParser.json(), parseParameters, ensureTopicSpecified);
-app.use('/cmd/:topic?/:message?/:qos?/:retain?', bodyParser.json(), parseParameters, ensureTopicSpecified);
-app.use('/subscribe/:topic?', bodyParser.json(), parseParameters, ensureTopicSpecified);
-app.use('/', logRequest, bodyParser.text({ type: 'text/plain' }, simpleApi);
+while(!mqttClient.connected){
+    await new Promise(r => setTimeout(r, 500));
+}
 
-app.listen(app.get('port'), '0.0.0.0', function () {
+const middleware = [bodyParser.json(), logRequest, parseParameters, authorizeUser, ensureTopicSpecified];
+//const middlewareSimple = [bodyParser.text({ type: 'text/plain' }), logRequest, authorizeUserSimple];
+const middlewareSimple = [bodyParser.text({ type: 'text/plain' }), authorizeUserSimple];
+
+app.set('port', settings.httpPort);
+app.use('/publish', middleware);
+app.use('/cmd', middleware);
+app.use('/subscribe/:topic?', middleware);
+
+const server = app.listen(app.get('port'), '0.0.0.0', function () {
     console.log('Node app is running on port', app.get('port'));
 });
 
 function publish(req, res){
+    console.log("publish, topic:", req.body.topic);
     let options = {
       qos : req.body.qos,
       retain : req.body.retain
@@ -53,7 +77,7 @@ function publish(req, res){
     res.sendStatus(200);
 }
 
-app.get('/publish/:topic?/:message?/:qos?/:retain?', publish);
+app.get('/publish/:topic?/:message?', publish);
 
 app.post('/publish', publish);
 
@@ -62,7 +86,8 @@ app.post('/publish', publish);
  * topic: command key
  * message: option key
  */
-app.get('/cmd/:topic?/:message?/:qos?/:retain?', ((req, res) => {
+app.get('/cmd/:topic?/:message?', ((req, res) => {
+    console.log("cmd, topic:", req.body.topic);
     const file = fs.readFileSync('./commands.yml', 'utf8');
     const cmd = yaml.parse(file)[req.body.topic];
     if (!cmd) {
@@ -79,28 +104,36 @@ app.get('/cmd/:topic?/:message?/:qos?/:retain?', ((req, res) => {
 
 app.get('/subscribe/:topic?', (req, res) => {
     const topic = req.body.topic;
-    const mqttClient = getMqttClient();
+    console.log("subscribe, topic:", topic);
+    const localMqttClient = getMqttClient(null);
 
-    mqttClient.on('connect', function () {
-        mqttClient.subscribe(topic);
+    // Tell the client to retry every 10 seconds if connectivity is lost
+    res.write('retry: 10000\n\n');
+
+    localMqttClient.on('connect', function () {
+        console.log("subscribe connected, topic:", topic);
+        localMqttClient.subscribe(topic);
     });
 
-    mqttClient.on('message', function (t, m) {
+    localMqttClient.on('message', function (t, m) {
+        console.log("subscribe message, topic:", t, "message:", m.toString());
         res.write(m);
     });
 
     req.on("close", function () {
-        mqttClient.end();
+        console.log("subscribe close, topic:", topic);
+        localMqttClient.end();
     });
 
     req.on("end", function () {
-        mqttClient.end();
+        console.log("subscribe end, topic:", topic);
+        localMqttClient.end();
     });
 });
 
-
-function simpleApi(req, res){
+app.all('*', middlewareSimple, (req, res) => {
     const topic = req.path.replace(/^\//g, '');
+    //console.log("simple, topic:", topic);
     if (req.method === 'PUT') {
         mqttClient.publish(topic, req.body, {retain: true });
         res.sendStatus(200);
@@ -114,25 +147,27 @@ function simpleApi(req, res){
         res.sendStatus(200);
     }
     else if (req.method === "GET") {
-        const localMqttClient = getMqttClient();
+        const localMqttClient = getMqttClient(null);
         localMqttClient.on('connect', function () {
             localMqttClient.subscribe(topic);
         });
 
         localMqttClient.on('message', function (t, m) {
+			//console.log("message, topic:", t, "message:", m.toString());
+			console.log(t, m.toString());
             res.send(m.toString());
             res.end();
             localMqttClient.end();
         });
-        res.setTimeout(1 * 500, () => {
+        res.setTimeout(500, () => {
             res.end();
             localMqttClient.end();
         });
     }
     else {
-        res.status(500).send("wrong method");
+        res.status(405).send("Method Not Allowed");
     }
-}
+});
 
 function logRequest(req, res, next) {
     const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
@@ -145,6 +180,16 @@ function logRequest(req, res, next) {
     console.log(message);
 
     next();
+}
+
+function authorizeUserSimple(req, res, next) {
+    if (settings.apiKey && (req.params["api-key"] || req.headers["api-key"]) !== settings.apiKey) {
+        console.warn('Request is not authorized.');
+        res.sendStatus(401);
+    }
+    else {
+        next();
+    }
 }
 
 function authorizeUser(req, res, next) {
@@ -218,6 +263,7 @@ var signals = {
 // Do any necessary shutdown logic for our application here
 const shutdown = (signal, value) => {
     console.log("shutdown!");
+    mqttClient.end();
     server.close(() => {
         console.log(`server stopped by ${signal} with value ${value}`);
         process.exit(128 + value);
@@ -230,3 +276,5 @@ Object.keys(signals).forEach((signal) => {
         shutdown(signal, signals[signal]);
     });
 });
+
+})();
