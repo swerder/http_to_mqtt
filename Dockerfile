@@ -1,4 +1,4 @@
-FROM node:lts
+FROM node:lts-alpine
 WORKDIR /app
 
 # Install app dependencies
@@ -9,10 +9,8 @@ COPY package*.json ./
 # If you are building your code for production
 RUN npm ci --only=production
 
-#VOLUME ['/app/commands.yml']
+EXPOSE 5000
+CMD [ "npm", "start", "--silent" ]
 
 # Bundle app source
 COPY . .
-
-EXPOSE 5000
-CMD [ "npm", "start" ]
