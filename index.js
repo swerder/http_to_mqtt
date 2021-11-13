@@ -33,14 +33,12 @@ function getMqttClient() {
 const mqttClient = getMqttClient();
 
 app.set('port', settings.httpPort);
-app.use(bodyParser.json());
 app.use(logRequest);
-app.use(parseParameters);
-app.use('/publish/:topic?/:message?/:qos?/:retain?', parseParameters);
-app.use('/cmd/:topic?/:message?/:qos?/:retain?', parseParameters);
-app.use('/subscribe/:topic?', parseParameters);
 app.use(authorizeUser);
-app.use(ensureTopicSpecified);
+app.use('/publish/:topic?/:message?/:qos?/:retain?', bodyParser.json(), parseParameters, ensureTopicSpecified);
+app.use('/cmd/:topic?/:message?/:qos?/:retain?', bodyParser.json(), parseParameters, ensureTopicSpecified);
+app.use('/subscribe/:topic?', bodyParser.json(), parseParameters, ensureTopicSpecified);
+app.use('/', logRequest, bodyParser.text({ type: 'text/plain' }, simpleApi);
 
 app.listen(app.get('port'), '0.0.0.0', function () {
     console.log('Node app is running on port', app.get('port'));
@@ -99,6 +97,42 @@ app.get('/subscribe/:topic?', (req, res) => {
         mqttClient.end();
     });
 });
+
+
+function simpleApi(req, res){
+    const topic = req.path.replace(/^\//g, '');
+    if (req.method === 'PUT') {
+        mqttClient.publish(topic, req.body, {retain: true });
+        res.sendStatus(200);
+    }
+    else if (req.method === 'DELETE') {
+        mqttClient.publish(topic, null, {retain: true});
+        res.sendStatus(200);
+    }
+    else if (req.method === 'POST') {
+        mqttClient.publish(topic, req.body);
+        res.sendStatus(200);
+    }
+    else if (req.method === "GET") {
+        const localMqttClient = getMqttClient();
+        localMqttClient.on('connect', function () {
+            localMqttClient.subscribe(topic);
+        });
+
+        localMqttClient.on('message', function (t, m) {
+            res.send(m.toString());
+            res.end();
+            localMqttClient.end();
+        });
+        res.setTimeout(1 * 500, () => {
+            res.end();
+            localMqttClient.end();
+        });
+    }
+    else {
+        res.status(500).send("wrong method");
+    }
+}
 
 function logRequest(req, res, next) {
     const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
